@@ -17,4 +17,5 @@ merge和midi_decode是负责把输出的monophonic整合成polyphonic同时输�
 2. 修改训练和测试代码，加入dynamic padding，同时优化一些超参
 3. 希望能够处理2小节的音乐，而不是1小节的，从目前来看一小节的旋律插值效果不是很酷
 4. 对比pianotree，这个基本上由@Ke来运行，代码和模型都已经有了
+5. loss等图的输出
 
