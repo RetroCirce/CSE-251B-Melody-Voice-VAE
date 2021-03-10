@@ -4,6 +4,7 @@ import numpy as np
 import os
 import random
 import copy
+from tqdm import tqdm
 
                                 
 class Dataset:
@@ -13,18 +14,17 @@ class Dataset:
         self.max_voice = 10
         print("Dataset Init:" + filedir)
         if filedir is not None:
-            for i,f in enumerate(os.listdir(filedir)):
+            for i,f in enumerate(tqdm(os.listdir(filedir))):
                 if f.endswith(".mid"):
                     self.midifile.append(pyd.PrettyMIDI(os.path.join(filedir, f)))
-                if (i + 1) % 100 == 0:
-                    print("processed:", i)
                     # break
             print("Dataset Loaded!")
         else:
             print("Dataset Folder Invalid!")
     
     def split_dataset(self, r_train = 0.8, r_validate = 0.1, r_test = 0.1):
-        newmidi = self.midifile
+        newmidi = self.midifile[:]
+        random.seed(19991217)
         random.shuffle(newmidi)
         k = int(len(self.midifile) * r_train)
         v = int(len(self.midifile) * (r_train + r_validate))
@@ -34,7 +34,19 @@ class Dataset:
         self.test = newmidi[v:p]
         print("Finish Spliting!")
 
-    def process_midi(self, midi_file, measure_length = 16, min_step = 0.15):
+    def get_dataset_info(self):
+        max_note = 0
+        min_note = 128
+        for f in tqdm(self.midifile):
+            for ins in f.instruments:
+                temp_min = min(ins.notes, key = lambda x:x.pitch)
+                temp_max = max(ins.notes, key = lambda x:x.pitch)
+                max_note = max(max_note, temp_max.pitch)
+                min_note = min(min_note, temp_min.pitch)
+        print("max_note: %d \t min_note: %d \n" %(max_note, min_note))
+                
+
+    def process_midi(self, midi_file, measure_length = 32, min_step = 0.15):
         measure_time = round(measure_length * min_step,2)
         notes = []
         for ins in midi_file.instruments:
@@ -57,23 +69,38 @@ class Dataset:
             measures.append(measure)
         return measures
 
-    def note2token(self, notes, measure_length = 16, min_step = 0.15):
-        rest_state = 129
-        hold_state = 128
+    def note2token(self, notes, measure_length = 32, min_step = 0.15):
+        # min_note = 24 max_note = 108
+        note_bias = 24
+        rest_state = 86
+        hold_state = 85
         token = [rest_state] * measure_length
         for note in notes:
             sta = int(round(note[2] / min_step))
             end = int(round(note[3] / min_step))
             if sta < measure_length and end <= measure_length:
-                token[sta] = note[1]
+                token[sta] = note[1] - note_bias
                 token[sta + 1: end] = [hold_state] * (end - sta - 1)
         if len(token) != measure_length:
-            print("????")
+            print("error in the length of tokens")
         return token
-            
-    def process_measure(self, measure):
+    def split_measure(self, measure, pos_1 = 48, pos_2 = 60):
+        measure_1 = []
+        measure_2 = []
+        measure_3 = []
+        for note in measure:
+            if note[1] < pos_1:
+                measure_1.append(note)
+            elif note[1] > pos_2:
+                measure_3.append(note)
+            else:
+                measure_2.append(note)
+        return measure_1, measure_2, measure_3
+
+
+    def process_layer(self, measure, process_way = "FIX"):
         if len(measure) == 0:
-            return None
+            return []
         simu_group = []
         simu_notes = []
         pos = measure[0][2]
@@ -87,52 +114,96 @@ class Dataset:
                 simu_notes.append(note)
         if len(simu_notes) > 0:
             simu_group.append(simu_notes)
-        layer_index = [-1] * self.max_voice 
         layer = []
-        # print(simu_group)
         max_v = 0
         for sg in simu_group:
             max_v = max(max_v, len(sg))
-        if max_v == 1:
-            for i in range(self.max_voice):
-                layer_index[i] = [0] * len(simu_group)
-        else:
+        if process_way == "FIX":
+            layer_index = [-1] * self.max_voice 
+            if max_v == 1:
+                for i in range(self.max_voice):
+                    layer_index[i] = [0] * len(simu_group)
+            else:
+                if max_v > self.max_voice:
+                    return []
+                # print(max_v)
+                inter_step = self.max_voice / (max_v - 1)
+                for i in range(max_v):
+                    idx = min(self.max_voice - 1, int(round(inter_step * i)) - 1)
+                    if idx < 0:
+                        idx = 0
+                    layer_index[idx] = []
+                    for j in range(len(simu_group)):
+                        layer_index[idx].append(min(len(simu_group[j]) - 1, i))
+                temp_index = [0] * len(simu_group)
+                # print(layer_index)
+                for i in range(len(layer_index)):
+                    if layer_index[i] == -1:
+                        pos = i
+                        # print(i)
+                        tail = len(simu_group) - 1 
+                        while(pos < len(layer_index) and layer_index[pos] == -1):
+                            if tail >= 0:
+                                temp_index[tail] = min(len(simu_group[tail]) - 1, temp_index[tail] + 1)
+                                tail -= 1
+                            layer_index[pos] = temp_index[::]
+                            pos = pos + 1
+                        # print(layer_index)
+                    else:
+                        temp_index = layer_index[i][::]
+        if process_way == "DYNAMIC":
             if max_v > self.max_voice:
                 max_v = self.max_voice
-            # print(max_v)
-            inter_step = self.max_voice / (max_v - 1)
-            for i in range(max_v):
-                idx = min(self.max_voice - 1, int(round(inter_step * i)) - 1)
-                if idx < 0:
-                    idx = 0
-                layer_index[idx] = []
-                for j in range(len(simu_group)):
-                    layer_index[idx].append(min(len(simu_group[j]) - 1, i))
-            temp_index = [0] * len(simu_group)
-            # print(layer_index)
+            layer_index = [-1] * max_v
+            pos_layer = [0] * len(simu_group)
             for i in range(len(layer_index)):
-                if layer_index[i] == -1:
-                    pos = i
-                    # print(i)
-                    tail = len(simu_group) - 1 
-                    while(pos < len(layer_index) and layer_index[pos] == -1):
-                        if tail >= 0:
-                            temp_index[tail] = min(len(simu_group[tail]) - 1, temp_index[tail] + 1)
-                            tail -= 1
-                        layer_index[pos] = temp_index[::]
-                        pos = pos + 1
-                    # print(layer_index)
-                else:
-                    temp_index = layer_index[i][::]
+                layer_index [i] = pos_layer[:]
+                for j in range(len(pos_layer)):
+                    if pos_layer[j] < len(simu_group[j]) - 1:
+                        pos_layer[j] += 1
         # print(layer_index)
         for i, indexes in enumerate(layer_index):
             layer.append([])
             for j,idx in enumerate(indexes):
                 layer[i].append(simu_group[j][idx])
             layer[i] = self.note2token(layer[i])
-        return {"raw": measure, "layers": layer}
+        return layer
 
-    def process(self, measure_length = 16, min_step = 0.15, outdir = "layer_output/"):
+    def process_measure(self, measure, process_way = "FIX"):
+        if len(measure) == 0:
+            return None
+        # FIX DYNAMIC DYNAMIC_SUB DYNAMIC_SUB_PRIOR
+        if process_way == "FIX":
+            layers = self.process_layer(measure, process_way)
+        if process_way == "DYNAMIC":
+            layers = self.process_layer(measure, process_way)
+        if process_way == "DYNAMIC_SUB":
+            max_pitch = max(measure, key = lambda x:x[1])
+            min_pitch = min(measure, key = lambda x:x[1])
+            max_pitch = max_pitch[1]
+            min_pitch = min_pitch[1]
+            m1, m2, m3 = self.split_measure(
+                measure, 
+                pos_1 = min_pitch + int((max_pitch - min_pitch) / 3),
+                pos_2 = max_pitch - int((max_pitch - min_pitch) / 3)
+            )
+            layers = []
+            layers += self.process_layer(m1, process_way="DYNAMIC")
+            layers += self.process_layer(m2, process_way="DYNAMIC")
+            layers += self.process_layer(m3, process_way="DYNAMIC")
+        if process_way == "DYNAMIC_SUB_PRIOR":
+            m1, m2, m3 = self.split_measure(measure)
+            layers = []
+            layers += self.process_layer(m1, process_way="DYNAMIC")
+            layers += self.process_layer(m2, process_way="DYNAMIC")
+            layers += self.process_layer(m3, process_way="DYNAMIC")
+        if len(layers) == 0 or len(layers) > self.max_voice:
+            return None
+        else:
+            return {"raw": measure, "layers": layers}
+        
+
+    def process(self, measure_length = 32, min_step = 0.15, outdir = "layer_output/", process_way = "FIX"):
         print("Measure Time:", measure_length * min_step)
         self.train_measures = []
         self.validate_measures = []
@@ -149,32 +220,27 @@ class Dataset:
         for i in self.test:
             self.test_measures += self.process_midi(i, measure_length, min_step)
 
-        for i, m in enumerate(self.train_measures):
-            temp = self.process_measure(m)
+        for i, m in enumerate(tqdm(self.train_measures)):
+            temp = self.process_measure(m, process_way)
             if temp is not None:
                 self.train_layers.append(temp)
-                self.test_layer(inputs = temp, output = outdir + "train_" + str(i) + ".mid")
-            if i % 100 == 0:
-                print("prcessed:", i)
+                # self.test_layer(inputs = temp, output = outdir + "train_" + str(i) + ".mid")
 
-        for i, m in enumerate(self.validate_measures):
-            temp = self.process_measure(m)
+        for i, m in enumerate(tqdm(self.validate_measures)):
+            temp = self.process_measure(m, process_way)
             if temp is not None:
                 self.validate_layers.append(temp)
-                self.test_layer(inputs = temp, output = outdir + "validate_" + str(i) + ".mid")
-            if i % 100 == 0:
-                print("prcessed:", i)
+                # self.test_layer(inputs = temp, output = outdir + "validate_" + str(i) + ".mid")
 
-        for i, m in enumerate(self.test_measures):
-            temp = self.process_measure(m)
+        for i, m in enumerate(tqdm(self.test_measures)):
+            temp = self.process_measure(m, process_way)
             if temp is not None:
                 self.test_layers.append(temp)
                 self.test_layer(inputs = temp, output = outdir + "test_" + str(i) + ".mid")
-            if i % 100 == 0:
-                print("prcessed:", i)
         return True
     
-    def test_layer(self, inputs, output = "test.mid", measure_time = 2.4, min_step = 0.15):
+    def test_layer(self, inputs, output = "test.mid", measure_time = 4.8, min_step = 0.15):
+        note_bias = 24
         gen_midi = pyd.PrettyMIDI(initial_tempo = 100)
         melodies = pyd.Instrument(program = pyd.instrument_name_to_program('Acoustic Grand Piano'))
         time_bias = 0.0
@@ -191,10 +257,10 @@ class Dataset:
             )
         time_bias += measure_time
         time_bias = round(time_bias,2)
-        rest_state = 129
-        hold_state = 128
+        rest_state = 86
+        hold_state = 85
         for layer in layers:
-            prev = 129
+            prev = rest_state
             timeline = 0.0
             duration = 0.0
             for token in layer:
@@ -203,7 +269,7 @@ class Dataset:
                         melodies.notes.append(
                             pyd.Note(
                                 velocity = 100,
-                                pitch = prev,
+                                pitch = prev + note_bias,
                                 start = timeline + time_bias,
                                 end = timeline + duration + time_bias
                             )
@@ -221,7 +287,7 @@ class Dataset:
                 melodies.notes.append(
                     pyd.Note(
                         velocity = 100,
-                        pitch = prev,
+                        pitch = prev + note_bias,
                         start = timeline + time_bias,
                         end = timeline + duration + time_bias
                     )
@@ -231,7 +297,7 @@ class Dataset:
         gen_midi.instruments.append(melodies)
         gen_midi.write(output)
     
-    def test_out(self, measures, output = "test.mid", measure_time = 2.4):
+    def test_out(self, measures, output = "test.mid", measure_time = 4.8):
         gen_midi = pyd.PrettyMIDI(initial_tempo = 100)
         melodies = pyd.Instrument(program = pyd.instrument_name_to_program('Acoustic Grand Piano'))
         time_bias = 0.0

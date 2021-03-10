@@ -1,0 +1,4 @@
+data/
+layer_output/
+.ipynb_checkpoints
+__pycache__
