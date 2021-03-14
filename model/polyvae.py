@@ -47,7 +47,7 @@ class PolyVAE(nn.Module):
             nn.SELU()
         )
         self.tick_0 = Parameter(data = torch.zeros(self.vocab_dims))
-        self.d_embedding = nn.Embedding(input_dims, self.vocab_dims)
+        self.d_embedding = nn.Embedding(input_dims, self.vocab_dims, padding_idx=0)
         self.tick_gru = nn.GRU(
             self.vocab_dims + hidden_dims, hidden_dims, num_layers = self.tick_layer_num, 
             dropout = 0.2, batch_first = True)
@@ -67,8 +67,9 @@ class PolyVAE(nn.Module):
         self.eps = 1.0
         self.decay = torch.FloatTensor([decay])
 
-    def encoder(self, rx):
+    def encoder(self, rx, lens):
         rx = self.embedding(rx)
+        rx = torch.nn.utils.rnn.pack_padded_sequence(rx, lens, batch_first=True, enforce_sorted=False)
         rx = self.encoder_gru(rx)[-1]
         rx = rx.transpose(0,1).contiguous()
         rx = rx.view(rx.size(0), -1)
@@ -133,15 +134,16 @@ class PolyVAE(nn.Module):
 #                 print(y)
 #                 print(gd[:, i * self.tick_num + j,:])
         return torch.stack(ys, 1)
-    def forward(self, x, gd):
+
+    def forward(self, x, lens):
         # x: [batch, seq_len, 1] with input number range
         # gd: [batch, seq_len, 1] groundtruth of the melody sequence
 #         print("vae forward", self.training)
         if self.training:
             self.iteration += 1
-        r_dis = self.encoder(x)
+        r_dis = self.encoder(x, lens)
         z = r_dis.rsample()
-        recon = self.final_decoder(z, gd)
+        recon = self.final_decoder(z, x)
         return recon, r_dis, self.iteration
 
 
