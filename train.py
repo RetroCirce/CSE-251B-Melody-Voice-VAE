@@ -162,7 +162,7 @@ for epoch in range(n_epochs):
     v_mean_loss = 0.0
     v_mean_acc = 0.0
     total = 0
-    for i, d in tqdm(enumerate(train_dl)):
+    for i, d in enumerate(train_dl):
         # validate display
         x = d['data']
         lens = d['lens']
