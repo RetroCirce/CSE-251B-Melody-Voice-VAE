@@ -5,12 +5,13 @@
 
 import torch
 import os
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 import numpy as np
 from torch import optim
 from torch.distributions import kl_divergence, Normal
 from torch.nn import functional as F
 from torch.optim.lr_scheduler import ExponentialLR
-from tqdm import tqdm
 
 from DynamicDataset import DynamicDataset
 from model import PolyVAE
@@ -48,6 +49,7 @@ beat_num = 20
 tick_num = 16
 seq_len = beat_num * tick_num
 save_period = 1
+experiment_name = "default"
 ##############################
 
 
@@ -150,6 +152,61 @@ def loss_function(recon, target, r_dis, beta):
 
 # %%
 
+def save_model(model, optimizer):
+    root_model_path = os.path.join(experiment_dir, 'best_model.pt')
+    model_dict = model.state_dict()
+    state_dict = {'model': model_dict, 'optimizer': optimizer.state_dict()}
+    torch.save(state_dict, root_model_path)
+
+
+def load_model(model, optimizer):
+    state_dict = torch.load(os.path.join(experiment_dir, 'best_model.pt'))
+    model.load_state_dict(state_dict['model'])
+    optimizer.load_state_dict(state_dict['optimizer'])
+
+
+def record_stats(train_loss, train_acc, val_loss, val_acc):
+    training_losses.append(train_loss)
+    training_accs.append(train_acc)
+    val_losses.append(val_loss)
+    val_accs.append(val_acc)
+
+    plot_stats()
+
+
+def plot_stats():
+    e = len(training_losses)
+    x_axis = np.arange(1, e + 1, 1)
+    plt.figure()
+    plt.plot(x_axis, training_losses, label="Training Loss")
+    plt.plot(x_axis, val_losses, label="Validation Loss")
+    plt.xlabel("Epochs")
+    plt.legend(loc='best')
+    plt.savefig(os.path.join(experiment_dir, "loss_plot.png"))
+    plt.close()
+
+    plt.figure()
+    plt.plot(x_axis, training_accs, label="Training Accuracy")
+    plt.plot(x_axis, val_accs, label="Validation Accuracy")
+    plt.xlabel("Epochs")
+    plt.legend(loc='best')
+    plt.savefig(os.path.join(experiment_dir, "acc_plot.png"))
+    plt.close()
+
+
+# %%
+
+# rename the experiment dir name every time when you tune the hyperparameters
+experiment_dir = os.path.join("experiment_data/", experiment_name)
+os.makedirs(experiment_dir, exist_ok=True)
+
+training_losses = []
+val_losses = []
+training_accs = []
+val_accs = []
+
+best_loss = 1000
+
 # start training
 logs = []
 device = torch.device(torch.cuda.current_device())
@@ -162,46 +219,56 @@ for epoch in range(n_epochs):
     v_mean_loss = 0.0
     v_mean_acc = 0.0
     total = 0
-    for i, d in enumerate(train_dl):
-        # validate display
-        x = d['data']
-        lens = d['lens']
-        model.train()
-        j = i % len(validate_set)
-        v_x = validate_set[j]['data'].unsqueeze(0)
-        v_lens = validate_set[j]['lens'].unsqueeze(0)
+    with tqdm(train_dl) as t:
+        for i, d in enumerate(t):
+            # validate display
+            x = d['data']
+            lens = d['lens']
+            model.train()
+            j = i % len(validate_set)
+            v_x = validate_set[j]['data'].unsqueeze(0)
+            v_lens = validate_set[j]['lens'].unsqueeze(0)
 
-        x = x.to(device=device, non_blocking=True)
-        # lens = lens.to(device=device, non_blocking=True)
-        v_x = v_x.to(device=device, non_blocking=True)
-        # v_lens = v_lens.to(device=device, non_blocking=True)
+            x = x.to(device=device, non_blocking=True)
+            # lens = lens.to(device=device, non_blocking=True)
+            v_x = v_x.to(device=device, non_blocking=True)
+            # v_lens = v_lens.to(device=device, non_blocking=True)
 
-        optimizer.zero_grad()
-        recon, r_dis, iteration = model(x, lens)
+            optimizer.zero_grad()
+            recon, r_dis, iteration = model(x, lens)
 
-        acc, loss = loss_function(recon, x.view(-1), r_dis, vae_beta)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
-        optimizer.step()
-        mean_loss += loss.item()
-        mean_acc += acc.item()
+            acc, loss = loss_function(recon, x.view(-1), r_dis, vae_beta)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+            optimizer.step()
+            mean_loss += loss.item()
+            mean_acc += acc.item()
 
-        model.eval()
-        with torch.no_grad():
-            v_recon, v_r_dis, _ = model(v_x, v_lens)
-            v_acc, v_loss = loss_function(v_recon, v_x.view(-1), v_r_dis, vae_beta)
-            v_mean_loss += v_loss.item()
-            v_mean_acc += v_acc.item()
-        step += 1
-        total += 1
-        if decay > 0:
-            scheduler.step()
-        print("batch %d loss: %.5f acc: %.5f | val loss %.5f acc: %.5f iteration: %d"
-              % (i, loss.item(), acc.item(), v_loss.item(), v_acc.item(), iteration), flush=True)
+            model.eval()
+            with torch.no_grad():
+                v_recon, v_r_dis, _ = model(v_x, v_lens)
+                v_acc, v_loss = loss_function(v_recon, v_x.view(-1), v_r_dis, vae_beta)
+                v_mean_loss += v_loss.item()
+                v_mean_acc += v_acc.item()
+            step += 1
+            total += 1
+            if decay > 0:
+                scheduler.step()
+            t.set_postfix({
+                'train_loss': f'{float(loss):.3f}',
+                'train_acc': f'{float(acc):.3f}',
+                'valid_loss': f'{float(v_loss):.3f}',
+                'valid_acc': f'{float(v_acc):.3f}',
+            })
+            # print("batch %d loss: %.5f acc: %.5f | val loss %.5f acc: %.5f iteration: %d"
+            #       % (i,loss.item(), acc.item(), v_loss.item(),v_acc.item(),iteration),flush = True)
     mean_loss /= total
     mean_acc /= total
     v_mean_loss /= total
     v_mean_acc /= total
+
+    record_stats(mean_loss, mean_acc, v_mean_loss, v_mean_acc)
+
     print("epoch %d loss: %.5f acc: %.5f | val loss %.5f acc: %.5f iteration: %d"
           % (epoch, mean_loss, mean_acc, v_mean_loss, v_mean_acc, iteration), flush=True)
     logs.append([mean_loss, mean_acc, v_mean_loss, v_mean_acc, iteration])
@@ -211,6 +278,13 @@ for epoch in range(n_epochs):
         model.cuda()
     np.save("sketchvae-log.npy", logs)
 
+    if v_mean_loss < best_loss:
+        save_model(model, optimizer)
+
 # %%
 
+# os.makedirs(experiment_dir, exist_ok=True)
+# record_stats(mean_loss, mean_acc, v_mean_loss, v_mean_acc)
+
+# %%
 
