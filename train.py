@@ -34,7 +34,7 @@ class MinExponentialLR(ExponentialLR):
 # initial parameters
 s_dir = ""
 batch_size = 64
-n_epochs = 1
+n_epochs = 100
 data_path = [s_dir + "data/poly_train_dynamic.npy",
              s_dir + "data/poly_validate_dynamic.npy",
              s_dir + "data/poly_train_dynamic.npy"]
@@ -49,7 +49,8 @@ beat_num = 20
 tick_num = 16
 seq_len = beat_num * tick_num
 save_period = 1
-experiment_name = "default"
+experiment_name = "dynamic"
+torch.cuda.set_device(0)
 ##############################
 
 
@@ -138,16 +139,18 @@ def std_normal(shape):
     return N
 
 
-def loss_function(recon, target, r_dis, beta):
-    CE = F.cross_entropy(recon.view(-1, recon.size(-1)), target, reduction="mean")
+def loss_function(recon, target, r_dis, beta, ignore_index=-100):
+    CE = F.cross_entropy(recon.view(-1, recon.size(-1)), target, reduction="mean", ignore_index=ignore_index)
     #     rhy_CE = F.nll_loss(recon_rhythm.view(-1, recon_rhythm.size(-1)), target_rhythm, reduction = "mean")
     normal1 = std_normal(r_dis.mean.size())
     KLD1 = kl_divergence(r_dis, normal1).mean()
     max_indices = recon.view(-1, recon.size(-1)).max(-1)[-1]
     #     print(max_indices)
     correct = max_indices == target
+    correct_without_pad = correct[target != 0]
     acc = torch.sum(correct.float()) / target.size(0)
-    return acc, CE + beta * (KLD1)
+    acc_without_pad = torch.sum(correct_without_pad.float()) / torch.sum(target != 0)
+    return acc, acc_without_pad, CE + beta * (KLD1)
 
 
 # %%
@@ -216,8 +219,10 @@ for epoch in range(n_epochs):
     print("epoch: %d\n__________________________________________" % (epoch), flush=True)
     mean_loss = 0.0
     mean_acc = 0.0
+    mean_acc_without_pad = 0.0
     v_mean_loss = 0.0
     v_mean_acc = 0.0
+    v_mean_acc_without_pad = 0.0
     total = 0
     with tqdm(train_dl) as t:
         for i, d in enumerate(t):
@@ -237,19 +242,22 @@ for epoch in range(n_epochs):
             optimizer.zero_grad()
             recon, r_dis, iteration = model(x, lens)
 
-            acc, loss = loss_function(recon, x.view(-1), r_dis, vae_beta)
+            # add ignore_index=0 for training without padding loss
+            acc, acc_without_pad, loss = loss_function(recon, x.view(-1), r_dis, vae_beta)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
             optimizer.step()
             mean_loss += loss.item()
             mean_acc += acc.item()
+            mean_acc_without_pad += acc_without_pad.item()
 
             model.eval()
             with torch.no_grad():
                 v_recon, v_r_dis, _ = model(v_x, v_lens)
-                v_acc, v_loss = loss_function(v_recon, v_x.view(-1), v_r_dis, vae_beta)
+                v_acc, v_acc_without_pad, v_loss = loss_function(v_recon, v_x.view(-1), v_r_dis, vae_beta, ignore_index=0)
                 v_mean_loss += v_loss.item()
                 v_mean_acc += v_acc.item()
+                v_mean_acc_without_pad += v_acc_without_pad.item()
             step += 1
             total += 1
             if decay > 0:
@@ -257,24 +265,28 @@ for epoch in range(n_epochs):
             t.set_postfix({
                 'train_loss': f'{float(loss):.3f}',
                 'train_acc': f'{float(acc):.3f}',
+                'train_acc_without_pad': f'{float(acc_without_pad):.3f}',
                 'valid_loss': f'{float(v_loss):.3f}',
                 'valid_acc': f'{float(v_acc):.3f}',
+                'valid_acc_without_pad': f'{float(v_acc_without_pad):.3f}',
             })
             # print("batch %d loss: %.5f acc: %.5f | val loss %.5f acc: %.5f iteration: %d"
             #       % (i,loss.item(), acc.item(), v_loss.item(),v_acc.item(),iteration),flush = True)
     mean_loss /= total
     mean_acc /= total
+    mean_acc_without_pad /= total
     v_mean_loss /= total
     v_mean_acc /= total
+    v_mean_acc_without_pad /= total
 
     record_stats(mean_loss, mean_acc, v_mean_loss, v_mean_acc)
 
-    print("epoch %d loss: %.5f acc: %.5f | val loss %.5f acc: %.5f iteration: %d"
-          % (epoch, mean_loss, mean_acc, v_mean_loss, v_mean_acc, iteration), flush=True)
+    print("epoch %d loss: %.5f acc: %.5f acc without pad: %.5f | val loss %.5f acc: %.5f acc without pad: %.5f iteration: %d"
+        % (epoch, mean_loss, mean_acc, mean_acc_without_pad, v_mean_loss, v_mean_acc, v_mean_acc_without_pad, iteration), flush=True)
     logs.append([mean_loss, mean_acc, v_mean_loss, v_mean_acc, iteration])
     if (epoch + 1) % save_period == 0:
         filename = "sketchvae-" + 'loss_' + str(mean_loss) + "_" + str(epoch + 1) + "_" + str(iteration) + ".pt"
-        torch.save(model.cpu().state_dict(), save_path + filename)
+        torch.save(model.cpu().state_dict(), os.path.join(experiment_dir, filename))
         model.cuda()
     np.save("sketchvae-log.npy", logs)
 
