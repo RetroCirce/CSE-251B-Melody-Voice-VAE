@@ -21,13 +21,13 @@ class MinExponentialLR(ExponentialLR):
 ###############################
 # initial parameters
 s_dir = "/home/zexue/Downloads/CSE251B/CSE-251B-Melody-Voice-VAE/"
-batch_size = 32
+batch_size = 256
 n_epochs = 200
 data_path = [s_dir + "data/poly_train_fix.npy",
              s_dir + "data/poly_validate_fix.npy",
              s_dir + "data/poly_test_fix.npy"]
 save_path = ""
-lr = 1e-4
+lr = 1e-3
 decay = 0.9999
 hidden_dims = 512
 z_dims = 1024
@@ -79,6 +79,7 @@ print(test_x.size())
 
 train_set = TensorDataset(train_x)
 validate_set = TensorDataset(validate_x)
+test_set = TensorDataset(test_x)
 
 train_set = DataLoader(
     dataset = train_set,
@@ -90,6 +91,15 @@ train_set = DataLoader(
 )
 validate_set = DataLoader(
     dataset = validate_set,
+    batch_size = batch_size, 
+    shuffle = False, 
+    num_workers = 0, 
+    pin_memory = True, 
+    drop_last = True
+)
+
+test_set = DataLoader(
+    dataset = test_set,
     batch_size = batch_size, 
     shuffle = False, 
     num_workers = 0, 
