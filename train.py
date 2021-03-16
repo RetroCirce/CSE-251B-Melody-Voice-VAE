@@ -12,7 +12,7 @@ from torch import optim
 from torch.distributions import kl_divergence, Normal
 from torch.nn import functional as F
 from torch.optim.lr_scheduler import ExponentialLR
-from model import PolyVAE_repara
+from model import PolyVAE
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 
 class MinExponentialLR(ExponentialLR):
@@ -29,7 +29,7 @@ class MinExponentialLR(ExponentialLR):
 # initial parameters
 s_dir = "./"
 batch_size = 64
-n_epochs = 4
+n_epochs = 200
 data_path = [s_dir + "data/poly_train_fix.npy",
              s_dir + "data/poly_validate_fix.npy",
              s_dir + "data/poly_test_fix.npy"]
@@ -99,7 +99,7 @@ validate_dl = DataLoader(
 # %%
 
 # import model
-model = PolyVAE_repara(input_dims, hidden_dims, z_dims, seq_len, beat_num, tick_num, 4000)
+model = PolyVAE(input_dims, hidden_dims, z_dims, seq_len, beat_num, tick_num, 4000)
 optimizer = optim.Adam(model.parameters(), lr=lr)
 if decay > 0:
     scheduler = MinExponentialLR(optimizer, gamma=decay, minimum=1e-5)
@@ -129,34 +129,33 @@ def std_normal(shape):
     return N
 
 
-# def loss_function(recon, target, r_dis, beta, ignore_index=-100):
-#     CE = F.cross_entropy(recon.view(-1, recon.size(-1)), target, reduction="mean", ignore_index=ignore_index)
-#     #     rhy_CE = F.nll_loss(recon_rhythm.view(-1, recon_rhythm.size(-1)), target_rhythm, reduction = "mean")
-#     normal1 = std_normal(r_dis.mean.size())
-#     KLD1 = kl_divergence(r_dis, normal1).mean()
-#     max_indices = recon.view(-1, recon.size(-1)).max(-1)[-1]
-#     #     print(max_indices)
-#     correct = max_indices == target
-#     correct_without_pad = correct[target != 0]
-#     acc = torch.sum(correct.float()) / target.size(0)
-#     acc_without_pad = torch.sum(correct_without_pad.float()) / torch.sum(target != 0)
-#     return acc, acc_without_pad, CE + beta * (KLD1)
-
-def loss_function(recon, target, z_mean, z_std, beta):
+def loss_function(recon, target, r_dis, beta):
     CE = F.cross_entropy(recon.view(-1, recon.size(-1)), target, reduction = "mean")
 #     rhy_CE = F.nll_loss(recon_rhythm.view(-1, recon_rhythm.size(-1)), target_rhythm, reduction = "mean")
-    
-    # normal1 =  std_normal(r_dis.mean.size())
-    # KLD1 = kl_divergence(r_dis, normal1).mean()
-    # mean_sq=z_mean * z_mean
-    # std_sq=z_std * z_std
-    KLD1 = torch.mean(0.5 * torch.sum(torch.exp(z_std) + z_mean**2 - z_std - 1, dim=1))
-
+    normal1 =  std_normal(r_dis.mean.size())
+    KLD1 = kl_divergence(r_dis, normal1).mean()
     max_indices = recon.view(-1, recon.size(-1)).max(-1)[-1]
 #     print(max_indices)
     correct = max_indices == target
     acc = torch.sum(correct.float()) / target.size(0)
     return acc, CE + beta * (KLD1)
+
+
+# def loss_function(recon, target, z_mean, z_std, beta):
+#     CE = F.cross_entropy(recon.view(-1, recon.size(-1)), target, reduction = "mean")
+# #     rhy_CE = F.nll_loss(recon_rhythm.view(-1, recon_rhythm.size(-1)), target_rhythm, reduction = "mean")
+    
+#     # normal1 =  std_normal(r_dis.mean.size())
+#     # KLD1 = kl_divergence(r_dis, normal1).mean()
+#     # mean_sq=z_mean * z_mean
+#     # std_sq=z_std * z_std
+#     KLD1 = torch.mean(0.5 * torch.sum(torch.exp(z_std) + z_mean**2 - z_std - 1, dim=1))
+
+#     max_indices = recon.view(-1, recon.size(-1)).max(-1)[-1]
+# #     print(max_indices)
+#     correct = max_indices == target
+#     acc = torch.sum(correct.float()) / target.size(0)
+#     return acc, CE + beta * (KLD1)
 
 
 # %%
@@ -242,9 +241,11 @@ for epoch in range(n_epochs):
             # v_lens = v_lens.to(device=device, non_blocking=True)
 
             optimizer.zero_grad()
-            recon, r_dis, iteration, z_mu, z_var = model(x, gd)
-            
-            acc, loss = loss_function(recon, gd.view(-1), z_mu, z_var, vae_beta)
+            # recon, r_dis, iteration, z_mu, z_var = model(x, gd)
+            recon, r_dis, iteration = model(x, gd)
+
+            acc, loss = loss_function(recon, x.view(-1), r_dis, vae_beta)
+            #acc, loss = loss_function(recon, gd.view(-1), z_mu, z_var, vae_beta)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
             optimizer.step()
@@ -270,8 +271,12 @@ for epoch in range(n_epochs):
                 v_x = v_x.to(device=device, non_blocking=True)
                 v_gd = v_gd.to(device=device, non_blocking=True)
 
-                v_recon, v_r_dis, v_iteration, v_z_mu, v_z_var = model(v_x, v_gd)
-                v_acc, v_loss = loss_function(v_recon, v_gd.view(-1), v_z_mu, v_z_var, vae_beta)
+                # v_recon, v_r_dis, v_iteration, v_z_mu, v_z_var = model(v_x, v_gd)
+                # v_acc, v_loss = loss_function(v_recon, v_gd.view(-1), v_z_mu, v_z_var, vae_beta)
+                v_recon, v_r_dis, v_iteration = model(v_x, v_gd)
+
+            # add ignore_index=0 for training without padding loss
+                v_acc, v_loss = loss_function(v_recon, v_gd.view(-1), v_r_dis, vae_beta)
                 v_mean_loss.append(v_loss.item())
                 v_mean_acc.append(v_acc.item())
                 t.set_postfix({
@@ -285,12 +290,11 @@ for epoch in range(n_epochs):
     mean_acc = sum(mean_acc) / len(mean_acc)
     v_mean_loss = sum(v_mean_loss) / len(v_mean_loss)
     v_mean_acc = sum(v_mean_acc) / len(v_mean_acc)
-    v_mean_acc_without_pad = sum(v_mean_acc_without_pad) / len(v_mean_acc_without_pad)
 
     record_stats(mean_loss, mean_acc, v_mean_loss, v_mean_acc)
 
-    print("epoch %d loss: %.5f acc: %.5f  | val loss %.5f acc: %.5f acc without pad: %.5f iteration: %d"
-        % (epoch, mean_loss, mean_acc, v_mean_loss, v_mean_acc, v_mean_acc_without_pad, iteration), flush=True)
+    print("epoch %d loss: %.5f acc: %.5f  | val loss %.5f acc: %.5f iteration: %d"
+        % (epoch, mean_loss, mean_acc, v_mean_loss, v_mean_acc, iteration), flush=True)
     logs.append([mean_loss, mean_acc, v_mean_loss, v_mean_acc, iteration])
     
     if v_mean_loss < best_loss:
