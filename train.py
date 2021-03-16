@@ -34,7 +34,7 @@ class MinExponentialLR(ExponentialLR):
 # initial parameters
 s_dir = ""
 batch_size = 64
-n_epochs = 100
+n_epochs = 200
 data_path = [s_dir + "data/poly_train_dynamic.npy",
              s_dir + "data/poly_validate_dynamic.npy",
              s_dir + "data/poly_train_dynamic.npy"]
@@ -44,13 +44,13 @@ decay = 0.9999
 hidden_dims = 512
 z_dims = 1024
 vae_beta = 0.1
-input_dims = 130
+input_dims = 90
 beat_num = 20
 tick_num = 16
 seq_len = beat_num * tick_num
 save_period = 1
 experiment_name = "dynamic"
-torch.cuda.set_device(0)
+torch.cuda.set_device(1)
 ##############################
 
 
@@ -214,15 +214,12 @@ best_loss = 1000
 logs = []
 device = torch.device(torch.cuda.current_device())
 iteration = 0
-step = 0
 for epoch in range(n_epochs):
     print("epoch: %d\n__________________________________________" % (epoch), flush=True)
-    mean_loss = 0.0
-    mean_acc = 0.0
-    mean_acc_without_pad = 0.0
-    v_mean_loss = 0.0
-    v_mean_acc = 0.0
-    v_mean_acc_without_pad = 0.0
+    mean_loss = []
+    mean_acc = []
+    mean_acc_without_pad = []
+
     total = 0
     with tqdm(train_dl) as t:
         for i, d in enumerate(t):
@@ -231,12 +228,12 @@ for epoch in range(n_epochs):
             lens = d['lens']
             model.train()
             j = i % len(validate_set)
-            v_x = validate_set[j]['data'].unsqueeze(0)
-            v_lens = validate_set[j]['lens'].unsqueeze(0)
+            # v_x = validate_set[j]['data'].unsqueeze(0)
+            # v_lens = validate_set[j]['lens'].unsqueeze(0)
 
             x = x.to(device=device, non_blocking=True)
             # lens = lens.to(device=device, non_blocking=True)
-            v_x = v_x.to(device=device, non_blocking=True)
+            # v_x = v_x.to(device=device, non_blocking=True)
             # v_lens = v_lens.to(device=device, non_blocking=True)
 
             optimizer.zero_grad()
@@ -247,37 +244,49 @@ for epoch in range(n_epochs):
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
             optimizer.step()
-            mean_loss += loss.item()
-            mean_acc += acc.item()
-            mean_acc_without_pad += acc_without_pad.item()
-
-            model.eval()
-            with torch.no_grad():
-                v_recon, v_r_dis, _ = model(v_x, v_lens)
-                v_acc, v_acc_without_pad, v_loss = loss_function(v_recon, v_x.view(-1), v_r_dis, vae_beta, ignore_index=0)
-                v_mean_loss += v_loss.item()
-                v_mean_acc += v_acc.item()
-                v_mean_acc_without_pad += v_acc_without_pad.item()
-            step += 1
+            mean_loss.append(loss.item())
+            mean_acc.append(acc.item())
+            mean_acc_without_pad.append(acc_without_pad.item())
             total += 1
             if decay > 0:
                 scheduler.step()
             t.set_postfix({
                 'train_loss': f'{float(loss):.3f}',
                 'train_acc': f'{float(acc):.3f}',
-                'train_acc_without_pad': f'{float(acc_without_pad):.3f}',
-                'valid_loss': f'{float(v_loss):.3f}',
-                'valid_acc': f'{float(v_acc):.3f}',
-                'valid_acc_without_pad': f'{float(v_acc_without_pad):.3f}',
+                'train_acc_without_pad': f'{float(acc_without_pad):.3f}'
             })
+
+
+    v_mean_loss = []
+    v_mean_acc = []
+    v_mean_acc_without_pad = []
+    model.eval()
+    with torch.no_grad():
+        with tqdm(validate_dl) as t:
+            for i, d in enumerate(t):
+                v_x = d['data']
+                v_lens = d['lens']
+                v_x = v_x.to(device=device, non_blocking=True)
+
+                v_recon, v_r_dis, _ = model(v_x, v_lens)
+                v_acc, v_acc_without_pad, v_loss = loss_function(v_recon, v_x.view(-1), v_r_dis, vae_beta)
+                v_mean_loss.append(v_loss.item())
+                v_mean_acc.append(v_acc.item())
+                v_mean_acc_without_pad.append(v_acc_without_pad.item())
+                t.set_postfix({
+                    'valid_loss': f'{float(v_loss):.3f}',
+                    'valid_acc': f'{float(v_acc):.3f}',
+                    'valid_acc_without_pad': f'{float(v_acc_without_pad):.3f}',
+                })
+
             # print("batch %d loss: %.5f acc: %.5f | val loss %.5f acc: %.5f iteration: %d"
             #       % (i,loss.item(), acc.item(), v_loss.item(),v_acc.item(),iteration),flush = True)
-    mean_loss /= total
-    mean_acc /= total
-    mean_acc_without_pad /= total
-    v_mean_loss /= total
-    v_mean_acc /= total
-    v_mean_acc_without_pad /= total
+    mean_loss = sum(mean_loss) / len(mean_loss)
+    mean_acc = sum(mean_acc) / len(mean_acc)
+    mean_acc_without_pad = sum(mean_acc_without_pad) / len(mean_acc_without_pad)
+    v_mean_loss = sum(v_mean_loss) / len(v_mean_loss)
+    v_mean_acc = sum(v_mean_acc) / len(v_mean_acc)
+    v_mean_acc_without_pad = sum(v_mean_acc_without_pad) / len(v_mean_acc_without_pad)
 
     record_stats(mean_loss, mean_acc, v_mean_loss, v_mean_acc)
 
