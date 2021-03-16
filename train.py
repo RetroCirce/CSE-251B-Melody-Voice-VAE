@@ -27,7 +27,7 @@ class MinExponentialLR(ExponentialLR):
         ]
 ###############################
 # initial parameters
-s_dir = "CSE-251B-Melody-Voice-VAE/"
+s_dir = "./"
 batch_size = 64
 n_epochs = 4
 data_path = [s_dir + "data/poly_train_fix.npy",
@@ -219,6 +219,7 @@ best_loss = 1000
 # start training
 logs = []
 device = torch.device(torch.cuda.current_device())
+print(device)
 iteration = 0
 for epoch in range(n_epochs):
     print("epoch: %d\n__________________________________________" % (epoch), flush=True)
@@ -230,14 +231,13 @@ for epoch in range(n_epochs):
     with tqdm(train_dl) as t:
         for i, d in enumerate(t):
             # validate display
-            x = d['data']
-            lens = d['lens']
+            x = gd = d[0]
             model.train()
-            j = i % len(validate_set)
             # v_x = validate_set[j]['data'].unsqueeze(0)
             # v_lens = validate_set[j]['lens'].unsqueeze(0)
 
             x = x.to(device=device, non_blocking=True)
+            gd = gd.to(device=device, non_blocking=True)
             # lens = lens.to(device=device, non_blocking=True)
             # v_x = v_x.to(device=device, non_blocking=True)
             # v_lens = v_lens.to(device=device, non_blocking=True)
@@ -267,12 +267,12 @@ for epoch in range(n_epochs):
     with torch.no_grad():
         with tqdm(validate_dl) as t:
             for i, d in enumerate(t):
-                v_x = d['data']
-                v_lens = d['lens']
+                v_x = v_gd = d[0]
                 v_x = v_x.to(device=device, non_blocking=True)
+                v_gd = v_gd.to(device=device, non_blocking=True)
 
-                recon, r_dis, iteration, z_mu, z_var = model(x, gd)
-                v_acc, v_loss = loss_function(recon, gd.view(-1), z_mu, z_var, vae_beta)
+                v_recon, v_r_dis, v_iteration, v_z_mu, v_z_var = model(v_x, v_gd)
+                v_acc, v_loss = loss_function(v_recon, v_gd.view(-1), v_z_mu, v_z_var, vae_beta)
                 v_mean_loss.append(v_loss.item())
                 v_mean_acc.append(v_acc.item())
                 t.set_postfix({
