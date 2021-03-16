@@ -225,7 +225,6 @@ for epoch in range(n_epochs):
     print("epoch: %d\n__________________________________________" % (epoch), flush=True)
     mean_loss = []
     mean_acc = []
-    mean_acc_without_pad = []
 
     total = 0
     with tqdm(train_dl) as t:
@@ -284,15 +283,14 @@ for epoch in range(n_epochs):
             #       % (i,loss.item(), acc.item(), v_loss.item(),v_acc.item(),iteration),flush = True)
     mean_loss = sum(mean_loss) / len(mean_loss)
     mean_acc = sum(mean_acc) / len(mean_acc)
-    mean_acc_without_pad = sum(mean_acc_without_pad) / len(mean_acc_without_pad)
     v_mean_loss = sum(v_mean_loss) / len(v_mean_loss)
     v_mean_acc = sum(v_mean_acc) / len(v_mean_acc)
     v_mean_acc_without_pad = sum(v_mean_acc_without_pad) / len(v_mean_acc_without_pad)
 
     record_stats(mean_loss, mean_acc, v_mean_loss, v_mean_acc)
 
-    print("epoch %d loss: %.5f acc: %.5f acc without pad: %.5f | val loss %.5f acc: %.5f acc without pad: %.5f iteration: %d"
-        % (epoch, mean_loss, mean_acc, mean_acc_without_pad, v_mean_loss, v_mean_acc, v_mean_acc_without_pad, iteration), flush=True)
+    print("epoch %d loss: %.5f acc: %.5f  | val loss %.5f acc: %.5f acc without pad: %.5f iteration: %d"
+        % (epoch, mean_loss, mean_acc, v_mean_loss, v_mean_acc, v_mean_acc_without_pad, iteration), flush=True)
     logs.append([mean_loss, mean_acc, v_mean_loss, v_mean_acc, iteration])
     
     if v_mean_loss < best_loss:
