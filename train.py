@@ -12,11 +12,8 @@ from torch import optim
 from torch.distributions import kl_divergence, Normal
 from torch.nn import functional as F
 from torch.optim.lr_scheduler import ExponentialLR
-
-from DynamicDataset import DynamicDataset
 from model import PolyVAE_repara
 from torch.utils.data import Dataset, DataLoader, TensorDataset
-
 
 class MinExponentialLR(ExponentialLR):
     def __init__(self, optimizer, gamma, minimum, last_epoch=-1):
@@ -25,43 +22,40 @@ class MinExponentialLR(ExponentialLR):
 
     def get_lr(self):
         return [
-            max(base_lr * self.gamma ** self.last_epoch, self.min)
+            max(base_lr * self.gamma**self.last_epoch, self.min)
             for base_lr in self.base_lrs
         ]
-
-
 ###############################
 # initial parameters
-s_dir = ""
+s_dir = "CSE-251B-Melody-Voice-VAE/"
 batch_size = 64
-n_epochs = 200
-data_path = [s_dir + "data/poly_train_dynamic.npy",
-             s_dir + "data/poly_validate_dynamic.npy",
-             s_dir + "data/poly_train_dynamic.npy"]
+n_epochs = 4
+data_path = [s_dir + "data/poly_train_fix.npy",
+             s_dir + "data/poly_validate_fix.npy",
+             s_dir + "data/poly_test_fix.npy"]
 save_path = ""
 lr = 1e-4
 decay = 0.9999
 hidden_dims = 512
 z_dims = 1024
-vae_beta = 1
+vae_beta = 0.1
 input_dims = 90
+seq_len = 20 * 16
 beat_num = 20
 tick_num = 16
-seq_len = beat_num * tick_num
 save_period = 1
-experiment_name = "repara"
-torch.cuda.set_device(1)
+experiment_name = "default"
 ##############################
 
 
 # %%
 
 # input data
-train_set = np.load(data_path[0], allow_pickle=True)
-validate_set = np.load(data_path[1], allow_pickle=True)
+train_set = np.load(data_path[0], allow_pickle = True)
+validate_set = np.load(data_path[1],allow_pickle = True) 
 
 train_x = []
-for i, data in enumerate(train_set):
+for i,data in enumerate(train_set):
     temp = []
     for d in data["layers"]:
         temp += d
@@ -70,25 +64,21 @@ train_x = np.array(train_x)
 # print(train_x.shape)
 
 validate_x = []
-for i, data in enumerate(validate_set):
+for i,data in enumerate(validate_set):
     temp = []
     for d in data["layers"]:
         temp += d
     validate_x.append(temp)
 validate_x = np.array(validate_x)
 # print(train_x.shape)
-# train_x = torch.from_numpy(train_x).long()
-# validate_x = torch.from_numpy(validate_x).long()
-#
-# print(train_x.size())
-# print(validate_x.size())
+train_x = torch.from_numpy(train_x).long()
+validate_x = torch.from_numpy(validate_x).long()
+
+print(train_x.size())
+print(validate_x.size())
 
 train_set = TensorDataset(train_x)
 validate_set = TensorDataset(validate_x)
-
-# train_set = DynamicDataset(train_x)
-# validate_set = DynamicDataset(validate_x)
-
 train_dl = DataLoader(
     dataset=train_set,
     batch_size=batch_size,
