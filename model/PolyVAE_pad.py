@@ -11,7 +11,7 @@ class PolyVAE_pad(nn.Module):
         hidden_dims = 512, z_dims = 1024, 
         seq_len = 160, beat_num = 10, tick_num = 16, 
         decay = 1000):
-        super(PolyVAE, self).__init__()
+        super(PolyVAE_pad, self).__init__()
         # encoder
         self.vocab_dims = 10
         self.layer_num = 2
