@@ -77,7 +77,7 @@ class PolyVAE_repara(nn.Module):
         r_mu = self.linear_mu(rx)
         # r_var = self.linear_var(rx)
         r_log_var = self.linear_log_var(rx)
-        r_var = torch.exp(r_log_var)#[64, 1024]
+        r_var = torch.exp(r_log_var*0.5)#[64, 1024]
         std_z = torch.randn(r_var.size()).cuda() #[64, 1024]
         assert not std_z.requires_grad
         #r_dis = Normal(r_mu, r_var)

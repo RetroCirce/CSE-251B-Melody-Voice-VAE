@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import torch
 import os
 import numpy as np
@@ -42,7 +43,7 @@ seq_len = 20 * 16
 beat_num = 20
 tick_num = 16
 save_period = 10
-
+experiment_name = "fix"
 
 train_x = []
 for i,data in enumerate(train_set):
@@ -110,6 +111,7 @@ test_set = DataLoader(
 )
 model = PolyVAE_repara(input_dims, hidden_dims, z_dims, seq_len, beat_num, tick_num, 4000)
 optimizer = optim.Adam(model.parameters(), lr = lr)
+
 if decay > 0:
     scheduler = MinExponentialLR(optimizer, gamma = decay, minimum = 1e-5)
 if torch.cuda.is_available():
@@ -117,8 +119,13 @@ if torch.cuda.is_available():
     model.cuda()
 else:
     print('Using: CPU')
-
+training_losses = []
+val_losses = []
+training_accs = []
+val_accs = []
 validate_data = []
+device = torch.device(torch.cuda.current_device())
+
 for i,d in enumerate(validate_set):
     validate_data.append(d[0])
 print(len(validate_data))
@@ -131,9 +138,9 @@ def loss_function(recon, target, z_mean, z_std, beta):
     
     # normal1 =  std_normal(r_dis.mean.size())
     # KLD1 = kl_divergence(r_dis, normal1).mean()
-    mean_sq=z_mean * z_mean
-    std_sq=z_std * z_std
-    KLD1 = 0.5 * torch.mean(mean_sq + std_sq - torch.log(std_sq) - 1)
+    # mean_sq=z_mean * z_mean
+    # std_sq=z_std * z_std
+    KLD1 = torch.mean(0.5 * torch.sum(torch.exp(z_std) + z_mean**2 - z_std - 1, dim=1))
 
     max_indices = recon.view(-1, recon.size(-1)).max(-1)[-1]
 #     print(max_indices)
@@ -152,7 +159,6 @@ def load_model(model, optimizer):
     state_dict = torch.load(os.path.join(experiment_dir, 'best_model.pt'))
     model.load_state_dict(state_dict['model'])
     optimizer.load_state_dict(state_dict['optimizer'])
-
 
 def record_stats(train_loss, train_acc, val_loss, val_acc):
     training_losses.append(train_loss)
@@ -182,123 +188,132 @@ def plot_stats():
     plt.savefig(os.path.join(experiment_dir, "acc_plot.png"))
     plt.close()
 
-
-training_losses = []
-val_losses = []
-training_accs = []
-val_accs = []
-best_loss = 1000
-
-device = torch.device(torch.cuda.current_device())
-
-logs = []
-iteration = 0
-step = 0
-best_acc=0
-for epoch in range(n_epochs):
-    print("epoch: %d\n__________________________________________" % (epoch), flush = True)
-    mean_loss = 0.0
+def valid():
+    model.eval()
+    device = torch.device(torch.cuda.current_device())
     mean_acc = 0.0
-    v_mean_loss = 0.0
-    v_mean_acc = 0.0
-    total = 0
-    for i, d in enumerate(train_set):
+    mean_loss=0.0
+    ys = []
+    gds = []
+    output = []
+    for i, d in enumerate(validate_set):
         # validate display
         x = gd = d[0]
-        model.train()
-        j = i % len(validate_data)
-        v_x = v_gd = validate_data[j]
-        
+            
         x = x.to(device = device,non_blocking = True)
         gd = gd.to(device = device,non_blocking = True)
-        v_x = v_x.to(device = device,non_blocking = True)
-        v_gd = v_gd.to(device = device,non_blocking = True)
-            
-        optimizer.zero_grad()
+                
         recon, r_dis, iteration, z_mu, z_var = model(x, gd)
-        
-        acc, loss = loss_function(recon, gd.view(-1), z_mu, z_var, vae_beta)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
-        optimizer.step()
-        mean_loss += loss.item()
+            
+        acc,v_loss = loss_function(recon, gd.view(-1), z_mu, z_var, vae_beta)
         mean_acc += acc.item()
-        
-        model.eval()
-        with torch.no_grad():
-            v_recon, v_r_dis, _, v_z_mu, v_z_var = model(v_x, v_gd)
-            v_acc, v_loss = loss_function(v_recon, v_gd.view(-1), v_z_mu, v_z_var, vae_beta)
-            v_mean_loss += v_loss.item()
-            v_mean_acc += v_acc.item()
-        step += 1
-        total += 1
-        if decay > 0:
-            scheduler.step()
-        if i % 200 == 0:
-            print("batch %d loss: %.5f acc: %.5f | val loss %.5f acc: %.5f iteration: %d"  
-                % (i,loss.item(), acc.item(), v_loss.item(),v_acc.item(),iteration),flush = True)
-    mean_loss /= total
-    mean_acc /= total
-    v_mean_loss /= total
-    v_mean_acc /= total
-    record_stats(mean_loss, mean_acc, v_mean_loss, v_mean_acc)
-
-    print("epoch %d loss: %.5f acc: %.5f | val loss %.5f acc: %.5f iteration: %d"  
-              % (epoch, mean_loss, mean_acc, v_mean_loss, v_mean_acc, iteration),flush = True)
-    logs.append([mean_loss,mean_acc,v_mean_loss,v_mean_acc,iteration])
-    if v_mean_loss < best_loss:
-        save_model(model, optimizer)
-        best_loss=v_mean_loss
-        model.cuda()
-        
+        mean_loss+=v_loss.item()
+    #     z = r_dis.rsample()
+        pred = recon.argmax(-1)
+        output.append({"gd":x.cpu().detach().numpy(), "pred":pred.cpu().detach().numpy(), "acc": acc.item()})
+    print("******validation acc: ", mean_acc/(i+1), "validation loss: ", mean_loss/(i+1))
+    return mean_loss/(i+1),mean_acc/(i+1)
 
 
-# test
-model=load_model(model, optimizer)
-model.eval()
-device = torch.device(torch.cuda.current_device())
-mean_acc = 0.0
-mean_loss=0.0
-ys = []
-gds = []
-output = []
-for i, d in enumerate(validate_set):
-    # validate display
-    x = gd = d[0]
-        
-    x = x.to(device = device,non_blocking = True)
-    gd = gd.to(device = device,non_blocking = True)
+
+
+# logs = []
+def train():
+    iteration = 0
+    step = 0
+    best_loss = 1000
+    for epoch in range(n_epochs):
+        print("epoch: %d\n__________________________________________" % (epoch), flush = True)
+        mean_loss = 0.0
+        mean_acc = 0.0
+        v_mean_loss = 0.0
+        v_mean_acc = 0.0
+        total = 0
+        for i, d in enumerate(train_set):
+            # validate display
+            x = gd = d[0]
+            model.train()
+            j = i % len(validate_data)
+            v_x = v_gd = validate_data[j]
             
-    recon, r_dis, iteration, z_mu, z_var = model(x, gd)
-        
-    acc,v_loss = loss_function(recon, gd.view(-1), z_mu, z_var, vae_beta)
-    mean_acc += acc.item()
-    mean_loss+=v_loss.item()
-#     z = r_dis.rsample()
-    pred = recon.argmax(-1)
-    output.append({"gd":x.cpu().detach().numpy(), "pred":pred.cpu().detach().numpy(), "acc": acc.item()})
-print("******validation acc: ", mean_acc/(i+1), "validation loss: ", mean_loss/(i+1))
-
-model.eval()
-device = torch.device(torch.cuda.current_device())
-mean_acc = 0.0
-mean_loss=0.0
-ys = []
-gds = []
-output = []
-for i, d in enumerate(test_set):
-    # validate display
-    x = gd = d[0]
-        
-    x = x.to(device = device,non_blocking = True)
-    gd = gd.to(device = device,non_blocking = True)
+            x = x.to(device = device,non_blocking = True)
+            gd = gd.to(device = device,non_blocking = True)
+            v_x = v_x.to(device = device,non_blocking = True)
+            v_gd = v_gd.to(device = device,non_blocking = True)
+                
+            optimizer.zero_grad()
+            recon, r_dis, iteration, z_mu, z_var = model(x, gd)
             
-    recon, r_dis, iteration, z_mu, z_var = model(x, gd)
-        
-    acc,v_loss = loss_function(recon, gd.view(-1), z_mu, z_var, vae_beta)
-    mean_acc += acc.item()
-    mean_loss+=v_loss.item()
-#     z = r_dis.rsample()
-    pred = recon.argmax(-1)
-    output.append({"gd":x.cpu().detach().numpy(), "pred":pred.cpu().detach().numpy(), "acc": acc.item()})
-print("******test acc: ", mean_acc/(i+1), "validation loss: ", mean_loss/(i+1))
+            acc, loss = loss_function(recon, gd.view(-1), z_mu, z_var, vae_beta)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+            optimizer.step()
+            mean_loss += loss.item()
+            mean_acc += acc.item()
+            
+            # model.eval()
+            # with torch.no_grad():
+            #     v_recon, v_r_dis, _, v_z_mu, v_z_var = model(v_x, v_gd)
+            #     v_acc, v_loss = loss_function(v_recon, v_gd.view(-1), v_z_mu, v_z_var, vae_beta)
+            #     v_mean_loss += v_loss.item()
+            #     v_mean_acc += v_acc.item()
+            step += 1
+            total += 1
+            if decay > 0:
+                scheduler.step()
+            if i % 200 == 0:
+                
+                # print("batch %d loss: %.5f acc: %.5f | val loss %.5f acc: %.5f iteration: %d"  
+                #     % (i,loss.item(), acc.item(), v_loss.item(),v_acc.item(),iteration),flush = True)
+                print("batch %d loss: %.5f acc: %.5f iteration: %d"  
+                    % (i,loss.item(), acc.item(),iteration),flush = True)
+        mean_loss /= total
+        mean_acc /= total
+        # v_mean_loss /= total
+        # v_mean_acc /= total
+        v_mean_loss, v_mean_acc=valid()
+        record_stats(mean_loss, mean_acc, v_mean_loss, v_mean_acc)
+
+        print("epoch %d loss: %.5f acc: %.5f | val loss %.5f acc: %.5f iteration: %d"  
+                % (epoch, mean_loss, mean_acc, v_mean_loss, v_mean_acc, iteration),flush = True)
+        # logs.append([mean_loss,mean_acc,v_mean_loss,v_mean_acc,iteration])
+        if v_mean_loss < best_loss:
+            save_model(model, optimizer)
+            best_loss=v_mean_loss
+            model.cuda()
+            
+
+
+def test():
+
+
+    #####
+    load_model(model, optimizer)
+    model.eval()
+    device = torch.device(torch.cuda.current_device())
+    mean_acc = 0.0
+    mean_loss=0.0
+    ys = []
+    gds = []
+    output = []
+    with torch.no_grad():
+        for i, d in enumerate(test_set):
+            # validate display
+            x = gd = d[0]
+                
+            x = x.to(device = device,non_blocking = True)
+            gd = gd.to(device = device,non_blocking = True)
+                    
+            recon, r_dis, iteration, z_mu, z_var = model(x, gd)
+                
+            acc,v_loss = loss_function(recon, gd.view(-1), z_mu, z_var, vae_beta)
+            mean_acc += acc.item()
+            mean_loss+=v_loss.item()
+        #     z = r_dis.rsample()
+            pred = recon.argmax(-1)
+            output.append({"gd":x.cpu().detach().numpy(), "pred":pred.cpu().detach().numpy(), "acc": acc.item()})
+    print("******test acc: ", mean_acc/(i+1), "test loss: ", mean_loss/(i+1))
+
+if __name__ == "__main__":
+    train()
+    test()
