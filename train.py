@@ -86,8 +86,8 @@ validate_x = np.array(validate_x)
 # train_set = TensorDataset(train_x)
 # validate_set = TensorDataset(validate_x)
 
-train_set = DynamicDataset(train_x)
-validate_set = DynamicDataset(validate_x)
+train_set = DynamicDataset(train_x, max_len=seq_len)
+validate_set = DynamicDataset(validate_x, max_len=seq_len)
 
 train_dl = DataLoader(
     dataset=train_set,
