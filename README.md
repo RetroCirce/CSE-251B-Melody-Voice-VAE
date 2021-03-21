@@ -3,8 +3,6 @@ To learn the representation of polyphonic music
 
 model文件夹下包含了模型的核心文件，不过目前这个模型存在一系列小问题，同时这个模型是没有dynamic padding的，我们后期要修正
 
-train和eval文件就是训练和测试的代码了，现在虽然progress report中说我们是用test集测得，但是实际上我们现在还是用val集合（
-
 recon_demo 和 result下保存了一些结果和可视化的组件，大部分只要由@Ke来读取和运行就可以了
 
 loader文件夹下保存了处理数据，分层旋律的一些代码，这个是没有dynamic padding的，我们后期要修正
